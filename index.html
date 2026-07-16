@@ -235,7 +235,6 @@
   }
 
   // ---------------- Constantes ----------------
-  var ADMIN_CODE = "LORIENT56";
   var STATUTS = ["actif","pause","pourvu"];
   var STATUT_LABEL = {actif:"Actif", pause:"En pause", pourvu:"Pourvu"};
   var PROJETS = ["RP","Invest","MDB","Autre"];
@@ -247,11 +246,13 @@
     recherches:[],
     agences:[],
     visites:[],
+    agentsManual:[],   // agents ajoutés manuellement par l'admin, pas encore connectés
+    adminCode:"LORIENT56",
     user:null,       // {prenom, agence}
     isAdmin:false,
     tab:'partagees',
     adminTab:'recherches',
-    modal:null        // {type:'add'|'edit'|'admin-edit', data}
+    modal:null        // {type:'add'|'edit'|'admin-edit'|'add-agent'|'edit-agent'|'confirm'|'rename-agence'|'params', data}
   };
 
   function uid(){ return Math.random().toString(36).slice(2,10); }
@@ -276,6 +277,14 @@
       var vSnap = await db.collection('data').doc('visites').get();
       state.visites = vSnap.exists ? (vSnap.data().items || []) : [];
     }catch(e){ console.error('Erreur chargement visites', e); state.visites = []; }
+    try{
+      var agSnap = await db.collection('data').doc('agentsManual').get();
+      state.agentsManual = agSnap.exists ? (agSnap.data().items || []) : [];
+    }catch(e){ console.error('Erreur chargement agents', e); state.agentsManual = []; }
+    try{
+      var cfgSnap = await db.collection('data').doc('config').get();
+      state.adminCode = cfgSnap.exists && cfgSnap.data().adminCode ? cfgSnap.data().adminCode : "LORIENT56";
+    }catch(e){ console.error('Erreur chargement config', e); state.adminCode = "LORIENT56"; }
     state.booted = true;
   }
   function warnStorageFail(){
@@ -293,6 +302,14 @@
   async function saveVisites(){
     try{ await db.collection('data').doc('visites').set({items: state.visites}); }
     catch(e){ console.error('Erreur sauvegarde visites', e); warnStorageFail(); }
+  }
+  async function saveAgentsManual(){
+    try{ await db.collection('data').doc('agentsManual').set({items: state.agentsManual}); }
+    catch(e){ console.error('Erreur sauvegarde agents', e); warnStorageFail(); }
+  }
+  async function saveConfig(){
+    try{ await db.collection('data').doc('config').set({adminCode: state.adminCode}); }
+    catch(e){ console.error('Erreur sauvegarde config', e); warnStorageFail(); }
   }
 
   // ---------------- Helpers données ----------------
@@ -332,6 +349,55 @@
     await saveAgences();
     await saveRecherches();
     await saveVisites();
+  }
+  function getMergedAgents(){
+    var map = {};
+    function key(p,a){ return p+'|||'+a; }
+    state.visites.forEach(function(v){
+      var k = key(v.prenom, v.agence);
+      if(!map[k]) map[k] = {prenom:v.prenom, agence:v.agence, nbVisites:0, derniereVisite:0, nbRecherches:0, source:'connexion'};
+      map[k].nbVisites++;
+      if(v.ts > map[k].derniereVisite) map[k].derniereVisite = v.ts;
+    });
+    state.recherches.forEach(function(r){
+      if(r.origine!=='agent' || !r.auteurPrenom) return;
+      var k = key(r.auteurPrenom, r.auteurAgence);
+      if(!map[k]) map[k] = {prenom:r.auteurPrenom, agence:r.auteurAgence, nbVisites:0, derniereVisite:0, nbRecherches:0, source:'recherche'};
+      map[k].nbRecherches++;
+    });
+    state.agentsManual.forEach(function(a){
+      var k = key(a.prenom, a.agence);
+      if(!map[k]) map[k] = {prenom:a.prenom, agence:a.agence, nbVisites:0, derniereVisite:0, nbRecherches:0, source:'manuel'};
+      map[k].manuel = true;
+    });
+    return Object.values(map).sort(function(a,b){ return (b.derniereVisite||0) - (a.derniereVisite||0); });
+  }
+  async function doRenameAgent(oldPrenom, oldAgence, newPrenom, newAgence){
+    newPrenom = (newPrenom||'').trim();
+    newAgence = (newAgence||'').trim();
+    if(!newPrenom || !newAgence) return;
+    state.visites.forEach(function(v){
+      if(v.prenom===oldPrenom && v.agence===oldAgence){ v.prenom = newPrenom; v.agence = newAgence; }
+    });
+    state.recherches.forEach(function(r){
+      if(r.origine==='agent' && r.auteurPrenom===oldPrenom && r.auteurAgence===oldAgence){
+        r.auteurPrenom = newPrenom; r.auteurAgence = newAgence;
+      }
+    });
+    state.agentsManual.forEach(function(a){
+      if(a.prenom===oldPrenom && a.agence===oldAgence){ a.prenom = newPrenom; a.agence = newAgence; }
+    });
+    if(newAgence && state.agences.indexOf(newAgence)===-1) state.agences.push(newAgence);
+    await saveVisites();
+    await saveRecherches();
+    await saveAgentsManual();
+    await saveAgences();
+  }
+  async function doDeleteAgent(prenom, agence){
+    state.visites = state.visites.filter(function(v){ return !(v.prenom===prenom && v.agence===agence); });
+    state.agentsManual = state.agentsManual.filter(function(a){ return !(a.prenom===prenom && a.agence===agence); });
+    await saveVisites();
+    await saveAgentsManual();
   }
   function nextRef(){
     var year = new Date().getFullYear();
@@ -418,7 +484,7 @@
     });
     document.getElementById('btn-admin-enter').addEventListener('click', function(){
       var code = document.getElementById('in-admincode').value;
-      if(code === ADMIN_CODE){
+      if(code === state.adminCode){
         state.isAdmin = true;
         state.adminTab = 'recherches';
         render();
@@ -441,11 +507,15 @@
       tabsHtml = renderTabs([
         {key:'recherches', label:'Recherches'},
         {key:'agences', label:'Agences'},
-        {key:'stats', label:'Statistiques'}
+        {key:'agents', label:'Agents'},
+        {key:'stats', label:'Statistiques'},
+        {key:'params', label:'Paramètres'}
       ], state.adminTab, true);
       if(state.adminTab==='recherches') contentHtml = renderAdminRecherches();
       else if(state.adminTab==='agences') contentHtml = renderAdminAgences();
-      else contentHtml = renderAdminStats();
+      else if(state.adminTab==='agents') contentHtml = renderAdminAgents();
+      else if(state.adminTab==='stats') contentHtml = renderAdminStats();
+      else contentHtml = renderAdminParams();
     } else {
       tabsHtml = renderTabs([
         {key:'partagees', label:'Recherches partagées'},
@@ -560,6 +630,41 @@
     return head + list + add + adhocSection;
   }
 
+  // ---------------- Vue admin : agents ----------------
+  function renderAdminAgents(){
+    var agents = getMergedAgents();
+    var head = '<div class="content-head"><div><h2>Agents</h2><p>Tous les agents connus — connectés au moins une fois, auteurs d’une recherche, ou ajoutés manuellement.</p></div>'
+      + '<button class="btn-add" id="btn-add-agent">+ Ajouter un agent</button></div>';
+    if(agents.length===0){
+      return head + '<div class="empty"><span class="display">Aucun agent pour le moment</span>Ils apparaîtront ici dès leur première connexion, ou ajoutez-en un manuellement.</div>';
+    }
+    var rows = agents.map(function(a){
+      var badge = a.manuel && a.nbVisites===0 ? '<span style="font-size:10.5px;color:var(--muted);font-style:italic;">jamais connecté</span>' : (a.derniereVisite ? new Date(a.derniereVisite).toLocaleDateString('fr-FR') : '—');
+      return '<tr>'
+        + '<td>'+esc(a.prenom)+'</td>'
+        + '<td>'+esc(a.agence)+'</td>'
+        + '<td class="mono">'+a.nbRecherches+'</td>'
+        + '<td class="mono">'+a.nbVisites+'</td>'
+        + '<td>'+badge+'</td>'
+        + '<td><div style="display:flex;gap:10px;"><button data-edit-agent="'+esc(a.prenom)+'|||'+esc(a.agence)+'" style="background:none;border:none;color:var(--sea);cursor:pointer;font-size:12px;font-weight:600;">Modifier</button><button data-del-agent="'+esc(a.prenom)+'|||'+esc(a.agence)+'" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:12px;font-weight:600;">Supprimer</button></div></td>'
+        + '</tr>';
+    }).join('');
+    var table = '<table><thead><tr><th>Prénom</th><th>Agence</th><th>Recherches</th><th>Visites</th><th>Dernière visite</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+    return head + table;
+  }
+
+  // ---------------- Vue admin : paramètres ----------------
+  function renderAdminParams(){
+    return '<div class="content-head"><div><h2>Paramètres</h2><p>Gestion de l’accès admin.</p></div></div>'
+      + '<div class="dossier" style="margin:0; max-width:420px; padding:24px;">'
+      + '  <label>Code admin actuel</label><input type="text" value="'+esc(state.adminCode)+'" disabled style="background:var(--paper);color:var(--muted);">'
+      + '  <label>Nouveau code admin</label><input type="password" id="in-new-admincode" placeholder="Nouveau code">'
+      + '  <div id="params-err" class="err" style="display:none;"></div>'
+      + '  <div id="params-ok" style="display:none;color:var(--sea);font-size:12.5px;margin-top:8px;">Code admin mis à jour.</div>'
+      + '  <button class="btn-primary" id="btn-save-admincode">Enregistrer le nouveau code</button>'
+      + '</div>';
+  }
+
   // ---------------- Vue admin : stats ----------------
   function renderAdminStats(){
     var head = '<div class="content-head"><div><h2>Statistiques de consultation</h2><p>Basées sur les connexions déclarées (prénom + agence) — indicatif, pas une authentification forte.</p></div></div>';
@@ -637,6 +742,44 @@
         var newName = document.getElementById('m-newname').value;
         closeModal();
         await doRenameAgence(oldName, newName);
+        render();
+      });
+      return;
+    }
+
+    if(state.modal.type==='add-agent' || state.modal.type==='edit-agent'){
+      var isEdit = state.modal.type==='edit-agent';
+      var ad = state.modal.data || {prenom:'', agence:''};
+      var opts = state.agences.map(function(a){return '<option value="'+esc(a)+'" '+(ad.agence===a?'selected':'')+'>'+esc(a)+'</option>';}).join('');
+      overlay.innerHTML = ''
+      + '<div class="modal">'
+      + '  <h3>'+(isEdit?'Modifier l’agent':'Ajouter un agent')+'</h3>'
+      + '  <label>Prénom</label><input type="text" id="m-agent-prenom" value="'+esc(ad.prenom)+'">'
+      + '  <label>Agence</label><select id="m-agent-agence"><option value="">— choisir —</option>'+opts+'</select>'
+      + (isEdit ? '<p style="font-size:12px;color:var(--muted);margin:10px 0 0;">Les recherches et l’historique de cet agent seront automatiquement mis à jour avec les nouvelles informations.</p>' : '')
+      + '  <div id="agent-err" class="err" style="display:none;"></div>'
+      + '  <div class="modal-actions"><button class="btn-cancel" id="m-cancel">Annuler</button><button class="btn-primary" id="m-save-agent">Enregistrer</button></div>'
+      + '</div>';
+      document.body.appendChild(overlay);
+      overlay.addEventListener('click', function(e){ if(e.target===overlay) closeModal(); });
+      document.getElementById('m-cancel').addEventListener('click', closeModal);
+      document.getElementById('m-save-agent').addEventListener('click', async function(){
+        var prenom = document.getElementById('m-agent-prenom').value.trim();
+        var agence = document.getElementById('m-agent-agence').value;
+        if(!prenom || !agence){
+          var err = document.getElementById('agent-err');
+          err.textContent = 'Merci de renseigner le prénom et l’agence.';
+          err.style.display = 'block';
+          return;
+        }
+        if(isEdit){
+          closeModal();
+          await doRenameAgent(ad.prenom, ad.agence, prenom, agence);
+        } else {
+          closeModal();
+          state.agentsManual.push({prenom:prenom, agence:agence, dateAjout:new Date().toISOString()});
+          await saveAgentsManual();
+        }
         render();
       });
       return;
@@ -828,6 +971,47 @@
         }};
         render();
       });
+    });
+    // admin agents
+    var addAgent = document.getElementById('btn-add-agent');
+    if(addAgent) addAgent.addEventListener('click', function(){
+      state.modal = {type:'add-agent', data:null};
+      render();
+    });
+    document.querySelectorAll('[data-edit-agent]').forEach(function(b){
+      b.addEventListener('click', function(){
+        var parts = b.dataset.editAgent.split('|||');
+        state.modal = {type:'edit-agent', data:{prenom:parts[0], agence:parts[1]}};
+        render();
+      });
+    });
+    document.querySelectorAll('[data-del-agent]').forEach(function(b){
+      b.addEventListener('click', function(){
+        var parts = b.dataset.delAgent.split('|||');
+        var prenom = parts[0], agence = parts[1];
+        state.modal = {type:'confirm', data:{
+          message:'Supprimer "'+prenom+'" ('+agence+') de la liste des agents ? Son historique de connexion sera effacé. Ses recherches déjà enregistrées resteront intactes et resteront gérables depuis l’onglet Recherches.',
+          onConfirm: async function(){ await doDeleteAgent(prenom, agence); }
+        }};
+        render();
+      });
+    });
+    // admin paramètres
+    var saveCode = document.getElementById('btn-save-admincode');
+    if(saveCode) saveCode.addEventListener('click', async function(){
+      var val = document.getElementById('in-new-admincode').value.trim();
+      var err = document.getElementById('params-err');
+      var ok = document.getElementById('params-ok');
+      err.style.display='none'; ok.style.display='none';
+      if(val.length < 4){
+        err.textContent = 'Le code doit faire au moins 4 caractères.';
+        err.style.display='block';
+        return;
+      }
+      state.adminCode = val;
+      await saveConfig();
+      ok.style.display='block';
+      document.getElementById('in-new-admincode').value = '';
     });
   }
 
