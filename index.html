@@ -265,6 +265,11 @@
   };
 
   function uid(){ return Math.random().toString(36).slice(2,10); }
+  function normKey(s){
+    return (s||'').toString().trim().toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      .replace(/\s+/g,' ');
+  }
 
   // ---------------- Stockage (Firestore) ----------------
   async function loadAll(){
@@ -323,19 +328,22 @@
 
   // ---------------- Helpers données ----------------
   function visibleForAgent(r, agence){
+    var na = normKey(agence);
+    var inList = (r.visibleTo||[]).some(function(a){ return normKey(a)===na; });
     if(r.origine === 'admin'){
-      return r.visibleToAll || (r.visibleTo||[]).indexOf(agence) !== -1;
+      return r.visibleToAll || inList;
     }
     // recherche postée par un agent : visible pour l'auteur (géré ailleurs) + agences ajoutées manuellement
-    return r.visibleToAll || (r.visibleTo||[]).indexOf(agence) !== -1;
+    return r.visibleToAll || inList;
   }
   function isMine(r){
-    return r.origine==='agent' && r.auteurPrenom===state.user.prenom && r.auteurAgence===state.user.agence;
+    return r.origine==='agent' && normKey(r.auteurPrenom)===normKey(state.user.prenom) && normKey(r.auteurAgence)===normKey(state.user.agence);
   }
   function getAdhocAgences(){
     var set = {};
-    state.visites.forEach(function(v){ if(state.agences.indexOf(v.agence)===-1) set[v.agence]=true; });
-    state.recherches.forEach(function(r){ if(r.auteurAgence && state.agences.indexOf(r.auteurAgence)===-1) set[r.auteurAgence]=true; });
+    function known(a){ return state.agences.some(function(x){ return normKey(x)===normKey(a); }); }
+    state.visites.forEach(function(v){ if(v.agence && !known(v.agence)) set[v.agence]=true; });
+    state.recherches.forEach(function(r){ if(r.auteurAgence && !known(r.auteurAgence)) set[r.auteurAgence]=true; });
     return Object.keys(set).sort();
   }
   function getAllKnownAgences(){
@@ -343,30 +351,31 @@
   }
   async function doRenameAgence(oldName, newName){
     newName = newName.trim();
-    if(!newName || newName===oldName) return;
-    state.agences = state.agences.filter(function(a){return a!==oldName;});
-    if(state.agences.indexOf(newName)===-1) state.agences.push(newName);
+    if(!newName || normKey(newName)===normKey(oldName)) return;
+    var no = normKey(oldName);
+    state.agences = state.agences.filter(function(a){return normKey(a)!==no;});
+    if(!state.agences.some(function(a){return normKey(a)===normKey(newName);})) state.agences.push(newName);
     state.recherches.forEach(function(r){
-      if(r.auteurAgence===oldName) r.auteurAgence = newName;
-      if(r.visibleTo && r.visibleTo.indexOf(oldName)!==-1){
-        r.visibleTo = r.visibleTo.filter(function(a){return a!==oldName;});
-        if(r.visibleTo.indexOf(newName)===-1) r.visibleTo.push(newName);
+      if(normKey(r.auteurAgence)===no) r.auteurAgence = newName;
+      if(r.visibleTo && r.visibleTo.some(function(a){return normKey(a)===no;})){
+        r.visibleTo = r.visibleTo.filter(function(a){return normKey(a)!==no;});
+        if(!r.visibleTo.some(function(a){return normKey(a)===normKey(newName);})) r.visibleTo.push(newName);
       }
     });
-    state.visites.forEach(function(v){ if(v.agence===oldName) v.agence = newName; });
-    if(state.user && state.user.agence===oldName) state.user.agence = newName;
+    state.visites.forEach(function(v){ if(normKey(v.agence)===no) v.agence = newName; });
+    if(state.user && normKey(state.user.agence)===no) state.user.agence = newName;
     await saveAgences();
     await saveRecherches();
     await saveVisites();
   }
   function getMergedAgents(){
     var map = {};
-    function key(p,a){ return p+'|||'+a; }
+    function key(p,a){ return normKey(p)+'|||'+normKey(a); }
     state.visites.forEach(function(v){
       var k = key(v.prenom, v.agence);
       if(!map[k]) map[k] = {prenom:v.prenom, agence:v.agence, nbVisites:0, derniereVisite:0, nbRecherches:0, source:'connexion'};
       map[k].nbVisites++;
-      if(v.ts > map[k].derniereVisite) map[k].derniereVisite = v.ts;
+      if(v.ts > map[k].derniereVisite){ map[k].derniereVisite = v.ts; map[k].prenom = v.prenom; map[k].agence = v.agence; }
     });
     state.recherches.forEach(function(r){
       if(r.origine!=='agent' || !r.auteurPrenom) return;
@@ -385,16 +394,17 @@
     newPrenom = (newPrenom||'').trim();
     newAgence = (newAgence||'').trim();
     if(!newPrenom || !newAgence) return;
+    var np = normKey(oldPrenom), na = normKey(oldAgence);
     state.visites.forEach(function(v){
-      if(v.prenom===oldPrenom && v.agence===oldAgence){ v.prenom = newPrenom; v.agence = newAgence; }
+      if(normKey(v.prenom)===np && normKey(v.agence)===na){ v.prenom = newPrenom; v.agence = newAgence; }
     });
     state.recherches.forEach(function(r){
-      if(r.origine==='agent' && r.auteurPrenom===oldPrenom && r.auteurAgence===oldAgence){
+      if(r.origine==='agent' && normKey(r.auteurPrenom)===np && normKey(r.auteurAgence)===na){
         r.auteurPrenom = newPrenom; r.auteurAgence = newAgence;
       }
     });
     state.agentsManual.forEach(function(a){
-      if(a.prenom===oldPrenom && a.agence===oldAgence){ a.prenom = newPrenom; a.agence = newAgence; }
+      if(normKey(a.prenom)===np && normKey(a.agence)===na){ a.prenom = newPrenom; a.agence = newAgence; }
     });
     if(newAgence && state.agences.indexOf(newAgence)===-1) state.agences.push(newAgence);
     await saveVisites();
@@ -403,8 +413,9 @@
     await saveAgences();
   }
   async function doDeleteAgent(prenom, agence){
-    state.visites = state.visites.filter(function(v){ return !(v.prenom===prenom && v.agence===agence); });
-    state.agentsManual = state.agentsManual.filter(function(a){ return !(a.prenom===prenom && a.agence===agence); });
+    var np = normKey(prenom), na = normKey(agence);
+    state.visites = state.visites.filter(function(v){ return !(normKey(v.prenom)===np && normKey(v.agence)===na); });
+    state.agentsManual = state.agentsManual.filter(function(a){ return !(normKey(a.prenom)===np && normKey(a.agence)===na); });
     await saveVisites();
     await saveAgentsManual();
   }
@@ -462,6 +473,27 @@
     + '  </div>'
     + '</div></div>';
   }
+  function resolveCanonicalAgence(agence){
+    var na = normKey(agence);
+    for(var i=0;i<state.agences.length;i++){
+      if(normKey(state.agences[i])===na) return state.agences[i];
+    }
+    return agence;
+  }
+  function resolveCanonicalAgent(prenom, agence){
+    var np = normKey(prenom), na = normKey(agence);
+    var sources = [];
+    state.visites.forEach(function(v){ sources.push({prenom:v.prenom, agence:v.agence, ts:v.ts||0}); });
+    state.recherches.forEach(function(r){ if(r.origine==='agent' && r.auteurPrenom) sources.push({prenom:r.auteurPrenom, agence:r.auteurAgence, ts:0}); });
+    state.agentsManual.forEach(function(a){ sources.push({prenom:a.prenom, agence:a.agence, ts:0}); });
+    var match = null;
+    sources.forEach(function(s){
+      if(normKey(s.prenom)===np && normKey(s.agence)===na){
+        if(!match || s.ts > match.ts) match = s;
+      }
+    });
+    return match ? {prenom:match.prenom, agence:match.agence} : {prenom:prenom, agence:agence};
+  }
   function attachLoginEvents(){
     var sel = document.getElementById('in-agence');
     var autreInput = document.getElementById('in-agence-autre');
@@ -470,19 +502,21 @@
     });
     document.getElementById('btn-login').addEventListener('click', async function(){
       var prenom = document.getElementById('in-prenom').value.trim();
-      var agence = sel.value === '__autre' ? autreInput.value.trim() : sel.value;
+      var agenceRaw = sel.value === '__autre' ? autreInput.value.trim() : sel.value;
       var err = document.getElementById('login-err');
-      if(!prenom || !agence){
+      if(!prenom || !agenceRaw){
         err.textContent = 'Merci de renseigner votre prénom et votre agence.';
         err.style.display='block';
         return;
       }
+      var agence = resolveCanonicalAgence(agenceRaw);
       if(sel.value === '__autre' && state.agences.indexOf(agence)===-1){
         state.agences.push(agence);
         await saveAgences();
       }
-      state.user = {prenom:prenom, agence:agence};
-      state.visites.push({prenom:prenom, agence:agence, ts:Date.now()});
+      var canon = resolveCanonicalAgent(prenom, agence);
+      state.user = {prenom:canon.prenom, agence:canon.agence};
+      state.visites.push({prenom:canon.prenom, agence:canon.agence, ts:Date.now()});
       await saveVisites();
       state.tab = 'partagees';
       render();
@@ -1052,7 +1086,7 @@
     if(addAg) addAg.addEventListener('click', async function(){
       var inp = document.getElementById('in-new-agence');
       var v = inp.value.trim();
-      if(v && state.agences.indexOf(v)===-1){
+      if(v && !state.agences.some(function(a){return normKey(a)===normKey(v);})){
         state.agences.push(v);
         await saveAgences();
         render();
@@ -1061,7 +1095,7 @@
     document.querySelectorAll('[data-promote-agence]').forEach(function(b){
       b.addEventListener('click', async function(){
         var name = b.dataset.promoteAgence;
-        if(state.agences.indexOf(name)===-1){
+        if(!state.agences.some(function(a){return normKey(a)===normKey(name);})){
           state.agences.push(name);
           await saveAgences();
           render();
