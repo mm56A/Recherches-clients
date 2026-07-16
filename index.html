@@ -110,6 +110,14 @@
   .content-head{display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:18px; gap:16px; flex-wrap:wrap;}
   .content-head h2{font-family:'Fraunces',serif; font-weight:500; font-size:20px; margin:0;}
   .content-head p{color:var(--muted); font-size:13px; margin:4px 0 0;}
+  .filters{
+    display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;
+    margin-bottom:18px; padding:14px 16px; background:var(--paper-raised);
+    border:1px solid var(--line); border-radius:6px;
+  }
+  .filters .f-group{display:flex; flex-direction:column; gap:4px; min-width:130px;}
+  .filters .f-group label{margin:0; font-size:10.5px; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); font-weight:600;}
+  .filters input, .filters select{padding:7px 9px; font-size:13px;}
   .btn-add{
     background:var(--accent); color:#fff; border:none; padding:9px 16px;
     border-radius:var(--radius); font-size:13.5px; font-weight:600; cursor:pointer;
@@ -252,7 +260,8 @@
     isAdmin:false,
     tab:'partagees',
     adminTab:'recherches',
-    modal:null        // {type:'add'|'edit'|'admin-edit'|'add-agent'|'edit-agent'|'confirm'|'rename-agence'|'params', data}
+    modal:null,        // {type:'add'|'edit'|'admin-edit'|'add-agent'|'edit-agent'|'confirm'|'rename-agence'|'params', data}
+    filters:{q:'', zone:'', typeBien:'', projet:'', statut:'', budgetMin:'', budgetMax:''}
   };
 
   function uid(){ return Math.random().toString(36).slice(2,10); }
@@ -536,28 +545,110 @@
   }
 
   // ---------------- Vue agent : recherches partagées ----------------
+  function matchesFilters(r){
+    var f = state.filters;
+    if(f.q){
+      var q = f.q.toLowerCase();
+      var hay = [r.reference, r.zone, r.typeBien, r.criteres].filter(Boolean).join(' ').toLowerCase();
+      if(hay.indexOf(q)===-1) return false;
+    }
+    if(f.zone && (r.zone||'').toLowerCase().indexOf(f.zone.toLowerCase())===-1) return false;
+    if(f.typeBien && (r.typeBien||'').toLowerCase().indexOf(f.typeBien.toLowerCase())===-1) return false;
+    if(f.projet && r.projet!==f.projet) return false;
+    if(f.statut && r.statut!==f.statut) return false;
+    if(f.budgetMin && (!r.budgetMax || r.budgetMax < Number(f.budgetMin))) return false;
+    if(f.budgetMax && (!r.budgetMax || r.budgetMax > Number(f.budgetMax))) return false;
+    return true;
+  }
+  function hasActiveFilters(){
+    var f = state.filters;
+    return !!(f.q||f.zone||f.typeBien||f.projet||f.statut||f.budgetMin||f.budgetMax);
+  }
+  function renderFilterBar(){
+    var f = state.filters;
+    return '<div class="filters">'
+      + '<div class="f-group"><label>Mot-clé</label><input type="text" id="filt-q" placeholder="Référence, zone…" value="'+esc(f.q)+'"></div>'
+      + '<div class="f-group"><label>Zone</label><input type="text" id="filt-zone" placeholder="Ex : Lorient" value="'+esc(f.zone)+'"></div>'
+      + '<div class="f-group"><label>Type de bien</label><input type="text" id="filt-type" placeholder="Ex : T2" value="'+esc(f.typeBien)+'"></div>'
+      + '<div class="f-group"><label>Projet</label><select id="filt-projet"><option value="">Tous</option>'+PROJETS.map(function(p){return '<option value="'+p+'" '+(f.projet===p?'selected':'')+'>'+PROJET_LABEL[p]+'</option>';}).join('')+'</select></div>'
+      + '<div class="f-group"><label>Statut</label><select id="filt-statut"><option value="">Tous</option>'+STATUTS.map(function(s){return '<option value="'+s+'" '+(f.statut===s?'selected':'')+'>'+STATUT_LABEL[s]+'</option>';}).join('')+'</select></div>'
+      + '<div class="f-group"><label>Budget mini (€)</label><input type="number" id="filt-budgetmin" value="'+esc(f.budgetMin)+'"></div>'
+      + '<div class="f-group"><label>Budget maxi (€)</label><input type="number" id="filt-budgetmax" value="'+esc(f.budgetMax)+'"></div>'
+      + '<button class="btn-ghost" id="filt-reset">Réinitialiser</button>'
+      + '</div>';
+  }
+  function withFocusPreserved(mutateFn){
+    var active = document.activeElement;
+    var activeId = active && active.id;
+    var selStart, selEnd;
+    if(active && typeof active.selectionStart === 'number'){ selStart = active.selectionStart; selEnd = active.selectionEnd; }
+    mutateFn();
+    render();
+    if(activeId){
+      var el = document.getElementById(activeId);
+      if(el){
+        el.focus();
+        if(typeof selStart === 'number' && el.setSelectionRange){ try{ el.setSelectionRange(selStart, selEnd); }catch(e){} }
+      }
+    }
+  }
+  function attachFilterEvents(){
+    function bindText(id, key){
+      var el = document.getElementById(id);
+      if(!el) return;
+      el.addEventListener('input', function(){ withFocusPreserved(function(){ state.filters[key] = el.value; }); });
+    }
+    function bindSelect(id, key){
+      var el = document.getElementById(id);
+      if(!el) return;
+      el.addEventListener('change', function(){ state.filters[key] = el.value; render(); });
+    }
+    bindText('filt-q','q');
+    bindText('filt-zone','zone');
+    bindText('filt-type','typeBien');
+    bindSelect('filt-projet','projet');
+    bindSelect('filt-statut','statut');
+    bindText('filt-budgetmin','budgetMin');
+    bindText('filt-budgetmax','budgetMax');
+    var reset = document.getElementById('filt-reset');
+    if(reset) reset.addEventListener('click', function(){
+      state.filters = {q:'', zone:'', typeBien:'', projet:'', statut:'', budgetMin:'', budgetMax:''};
+      render();
+    });
+  }
+
   function renderAgentPartagees(){
-    var list = state.recherches.filter(function(r){
+    var listAll = state.recherches.filter(function(r){
       if(isMine(r)) return false; // les siennes sont dans l'autre onglet
       return visibleForAgent(r, state.user.agence);
     }).sort(function(a,b){ return (b.dateMaj||'').localeCompare(a.dateMaj||''); });
+    var list = listAll.filter(matchesFilters);
 
     var head = '<div class="content-head"><div><h2>Recherches partagées avec '+esc(state.user.agence)+'</h2><p>Mises à jour en temps réel par Investir à Lorient et les autres agences partenaires.</p></div></div>';
-    if(list.length===0){
+    if(listAll.length===0){
       return head + '<div class="empty"><span class="display">Aucune recherche partagée pour le moment</span>Revenez un peu plus tard, ou contactez Investir à Lorient directement.</div>';
     }
-    return head + '<div class="grid">' + list.map(renderCard).join('') + '</div>';
+    var filterBar = renderFilterBar();
+    if(list.length===0){
+      return head + filterBar + '<div class="empty"><span class="display">Aucun résultat</span>Aucune recherche ne correspond à ces filtres.</div>';
+    }
+    return head + filterBar + '<div class="grid">' + list.map(renderCard).join('') + '</div>';
   }
 
   // ---------------- Vue agent : mes recherches ----------------
   function renderAgentMiennes(){
-    var list = state.recherches.filter(isMine).sort(function(a,b){ return (b.dateMaj||'').localeCompare(a.dateMaj||''); });
+    var listAll = state.recherches.filter(isMine).sort(function(a,b){ return (b.dateMaj||'').localeCompare(a.dateMaj||''); });
+    var list = listAll.filter(matchesFilters);
     var head = '<div class="content-head"><div><h2>Mes recherches clients</h2><p>Visibles par Investir à Lorient. Partagées avec d’autres agences uniquement si nous en décidons ensemble.</p></div>'
       + '<button class="btn-add" id="btn-add-recherche">+ Ajouter une recherche</button></div>';
-    if(list.length===0){
+    if(listAll.length===0){
       return head + '<div class="empty"><span class="display">Vous n’avez encore ajouté aucune recherche</span>Cliquez sur « Ajouter une recherche » pour transmettre un besoin client.</div>';
     }
-    return head + '<div class="grid">' + list.map(function(r){ return renderCard(r, true); }).join('') + '</div>';
+    var filterBar = renderFilterBar();
+    if(list.length===0){
+      return head + filterBar + '<div class="empty"><span class="display">Aucun résultat</span>Aucune recherche ne correspond à ces filtres.</div>';
+    }
+    return head + filterBar + '<div class="grid">' + list.map(function(r){ return renderCard(r, true); }).join('') + '</div>';
   }
 
   function renderCard(r, editable){
@@ -584,13 +675,18 @@
 
   // ---------------- Vue admin : recherches ----------------
   function renderAdminRecherches(){
-    var list = state.recherches.slice().sort(function(a,b){ return (b.dateMaj||'').localeCompare(a.dateMaj||''); });
+    var listAll = state.recherches.slice().sort(function(a,b){ return (b.dateMaj||'').localeCompare(a.dateMaj||''); });
+    var list = listAll.filter(matchesFilters);
     var head = '<div class="content-head"><div><h2>Toutes les recherches</h2><p>Vos recherches + celles transmises par les agents. Gérez ici la visibilité par agence.</p></div>'
       + '<button class="btn-add" id="btn-add-recherche">+ Ajouter une recherche</button></div>';
-    if(list.length===0){
+    if(listAll.length===0){
       return head + '<div class="empty"><span class="display">Le registre est vide</span>Ajoutez votre première recherche client.</div>';
     }
-    return head + '<div class="grid">' + list.map(renderAdminCard).join('') + '</div>';
+    var filterBar = renderFilterBar();
+    if(list.length===0){
+      return head + filterBar + '<div class="empty"><span class="display">Aucun résultat</span>Aucune recherche ne correspond à ces filtres.</div>';
+    }
+    return head + filterBar + '<div class="grid">' + list.map(renderAdminCard).join('') + '</div>';
   }
   function renderAdminCard(r){
     var origine = r.origine==='agent' ? ('<span class="mono" style="font-size:11px;color:var(--sea);">via '+esc(r.auteurPrenom)+' · '+esc(r.auteurAgence)+'</span>') : '<span class="mono" style="font-size:11px;color:var(--muted);">ajoutée par vous</span>';
@@ -888,6 +984,7 @@
 
   // ---------------- Events shell ----------------
   function attachShellEvents(){
+    attachFilterEvents();
     document.getElementById('btn-logout').addEventListener('click', function(){
       state.user = null;
       state.isAdmin = false;
