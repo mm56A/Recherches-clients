@@ -893,6 +893,13 @@
       + '  <label>Budget max (€)</label><input type="number" id="m-budget" value="'+esc(r.budgetMax)+'" placeholder="Ex : 180000">'
       + '  <label>Critères spécifiques</label><textarea id="m-crit" rows="3" placeholder="Rendement visé, travaux acceptés, copropriété…">'+esc(r.criteres)+'</textarea>'
       + '  <label>Statut</label><select id="m-statut">'+STATUTS.map(function(s){return '<option value="'+s+'" '+(r.statut===s?'selected':'')+'>'+STATUT_LABEL[s]+'</option>';}).join('')+'</select>'
+      + (!state.isAdmin ? (''
+          + '  <label style="margin-top:16px;">Visibilité</label>'
+          + '  <div class="checks">'
+          + '    <label class="'+(!r.visibleToAll?'on':'')+'"><input type="radio" name="m-visib" value="prive" '+(!r.visibleToAll?'checked':'')+'> Seulement moi (+ Investir à Lorient)</label>'
+          + '    <label class="'+(r.visibleToAll?'on':'')+'"><input type="radio" name="m-visib" value="public" '+(r.visibleToAll?'checked':'')+'> Publique — toutes les agences</label>'
+          + '  </div>'
+        ) : '')
       + '  <div class="modal-actions"><button class="btn-cancel" id="m-cancel">Annuler</button><button class="btn-primary" id="m-save">Enregistrer</button></div>'
       + '</div>';
     } else if(state.modal.type==='admin-edit'){
@@ -930,6 +937,15 @@
         });
       });
     }
+    if((state.modal.type==='add' || state.modal.type==='edit') && !state.isAdmin){
+      overlay.querySelectorAll('input[name="m-visib"]').forEach(function(radio){
+        radio.addEventListener('change', function(){
+          overlay.querySelectorAll('input[name="m-visib"]').forEach(function(r){
+            r.closest('label').classList.toggle('on', r.checked);
+          });
+        });
+      });
+    }
 
     document.getElementById('m-save').addEventListener('click', async function(){
       if(state.modal.type==='add' || state.modal.type==='edit'){
@@ -945,7 +961,9 @@
           dateMaj: new Date().toISOString(),
           origine: state.isAdmin ? 'admin' : 'agent',
           visibleTo: state.modal.data ? state.modal.data.visibleTo || [] : [],
-          visibleToAll: state.modal.data ? !!state.modal.data.visibleToAll : false
+          visibleToAll: !state.isAdmin
+            ? (document.querySelector('input[name="m-visib"]:checked') ? document.querySelector('input[name="m-visib"]:checked').value==='public' : false)
+            : (state.modal.data ? !!state.modal.data.visibleToAll : false)
         };
         if(!state.isAdmin){
           data.auteurPrenom = state.user.prenom;
