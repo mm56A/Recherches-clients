@@ -131,6 +131,7 @@
   .card .zone{font-family:'Fraunces',serif; font-size:16.5px; font-weight:500; margin:0 0 2px; padding-right:60px;}
   .card .type{font-size:12.5px; color:var(--muted); margin-bottom:10px;}
   .card .budget{font-size:14px; font-weight:600; color:var(--accent); margin-bottom:8px;}
+  .pill-projet{display:inline-block; font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.03em; padding:2px 7px; border-radius:3px; background:var(--sea-soft); color:var(--sea); margin-bottom:8px;}
   .card .crit{font-size:12.5px; color:var(--ink-soft); line-height:1.5; margin-bottom:10px; white-space:pre-wrap;}
   .card .foot{display:flex; justify-content:space-between; align-items:center; border-top:1px dashed var(--line); padding-top:10px; margin-top:10px;}
   .statut{font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.03em; padding:3px 7px; border-radius:3px;}
@@ -237,6 +238,8 @@
   var ADMIN_CODE = "LORIENT56";
   var STATUTS = ["actif","pause","pourvu"];
   var STATUT_LABEL = {actif:"Actif", pause:"En pause", pourvu:"Pourvu"};
+  var PROJETS = ["RP","Invest","MDB","Autre"];
+  var PROJET_LABEL = {RP:"Résidence principale", Invest:"Investissement locatif", MDB:"Marchand de biens", Autre:"Autre"};
 
   // ---------------- Etat ----------------
   var state = {
@@ -500,6 +503,7 @@
     + '  <div class="tag mono">'+esc(r.reference||'—')+'</div>'
     + '  <div class="zone">'+esc(r.zone||'Zone non précisée')+'</div>'
     + '  <div class="type">'+esc(r.typeBien||'')+'</div>'
+    + (r.projet ? '<div class="pill-projet">'+esc(PROJET_LABEL[r.projet]||r.projet)+'</div>' : '')
     + (r.budgetMax ? '<div class="budget">≤ '+fmtBudget(r.budgetMax)+'</div>' : '')
     + (r.criteres ? '<div class="crit">'+esc(r.criteres)+'</div>' : '')
     + '  <div class="foot"><span class="statut '+r.statut+'">'+STATUT_LABEL[r.statut]+'</span><span class="maj">maj '+fmtDate(r.dateMaj)+'</span></div>'
@@ -526,6 +530,7 @@
     + '  <div class="tag mono">'+esc(r.reference||'—')+'</div>'
     + '  <div class="zone">'+esc(r.zone||'Zone non précisée')+'</div>'
     + '  <div class="type">'+esc(r.typeBien||'')+'</div>'
+    + (r.projet ? '<div class="pill-projet">'+esc(PROJET_LABEL[r.projet]||r.projet)+'</div>' : '')
     + (r.budgetMax ? '<div class="budget">≤ '+fmtBudget(r.budgetMax)+'</div>' : '')
     + (r.criteres ? '<div class="crit">'+esc(r.criteres)+'</div>' : '')
     + '  <div class="foot"><span class="statut '+r.statut+'">'+STATUT_LABEL[r.statut]+'</span><span class="maj">maj '+fmtDate(r.dateMaj)+'</span></div>'
@@ -645,6 +650,7 @@
       + '  <label>Référence</label><input type="text" id="m-ref" value="'+esc(r.reference)+'" class="mono">'
       + '  <label>Zone recherchée</label><input type="text" id="m-zone" value="'+esc(r.zone)+'" placeholder="Ex : Lorient centre, Kervenanec…">'
       + '  <label>Type de bien</label><input type="text" id="m-type" value="'+esc(r.typeBien)+'" placeholder="Ex : T2/T3, immeuble de rapport…">'
+      + '  <label>Type de projet</label><select id="m-projet"><option value="">Non précisé</option>'+PROJETS.map(function(p){return '<option value="'+p+'" '+(r.projet===p?'selected':'')+'>'+PROJET_LABEL[p]+'</option>';}).join('')+'</select>'
       + '  <label>Budget max (€)</label><input type="number" id="m-budget" value="'+esc(r.budgetMax)+'" placeholder="Ex : 180000">'
       + '  <label>Critères spécifiques</label><textarea id="m-crit" rows="3" placeholder="Rendement visé, travaux acceptés, copropriété…">'+esc(r.criteres)+'</textarea>'
       + '  <label>Statut</label><select id="m-statut">'+STATUTS.map(function(s){return '<option value="'+s+'" '+(r.statut===s?'selected':'')+'>'+STATUT_LABEL[s]+'</option>';}).join('')+'</select>'
@@ -661,6 +667,7 @@
       + '  <h3>Gérer « '+esc(r2.reference)+' »</h3>'
       + '  <label>Zone</label><input type="text" id="m-zone" value="'+esc(r2.zone)+'">'
       + '  <label>Type de bien</label><input type="text" id="m-type" value="'+esc(r2.typeBien)+'">'
+      + '  <label>Type de projet</label><select id="m-projet"><option value="">Non précisé</option>'+PROJETS.map(function(p){return '<option value="'+p+'" '+(r2.projet===p?'selected':'')+'>'+PROJET_LABEL[p]+'</option>';}).join('')+'</select>'
       + '  <label>Budget max (€)</label><input type="number" id="m-budget" value="'+esc(r2.budgetMax)+'">'
       + '  <label>Critères</label><textarea id="m-crit" rows="3">'+esc(r2.criteres)+'</textarea>'
       + '  <label>Statut</label><select id="m-statut">'+STATUTS.map(function(s){return '<option value="'+s+'" '+(r2.statut===s?'selected':'')+'>'+STATUT_LABEL[s]+'</option>';}).join('')+'</select>'
@@ -692,6 +699,7 @@
           reference: document.getElementById('m-ref').value.trim(),
           zone: document.getElementById('m-zone').value.trim(),
           typeBien: document.getElementById('m-type').value.trim(),
+          projet: document.getElementById('m-projet').value,
           budgetMax: document.getElementById('m-budget').value ? Number(document.getElementById('m-budget').value) : null,
           criteres: document.getElementById('m-crit').value.trim(),
           statut: document.getElementById('m-statut').value,
@@ -715,6 +723,7 @@
         var r3 = state.modal.data;
         r3.zone = document.getElementById('m-zone').value.trim();
         r3.typeBien = document.getElementById('m-type').value.trim();
+        r3.projet = document.getElementById('m-projet').value;
         r3.budgetMax = document.getElementById('m-budget').value ? Number(document.getElementById('m-budget').value) : null;
         r3.criteres = document.getElementById('m-crit').value.trim();
         r3.statut = document.getElementById('m-statut').value;
